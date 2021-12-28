@@ -80,7 +80,7 @@ get_package_platform() {
 
     # Unlike package name and channel, platform can contain dashes, and thus
     # cannot be splitted with awk.
-    echo "$1" | sed $sed_opts 's/^[a-zA-Z0-9]+-[a-zA-Z0-9.]+-[a-zA-Z0-9]+-?(.*)$/\1/p'
+    echo "$1" | sed $sed_opts 's/^[a-zA-Z0-9]+-[a-zA-Z0-9.]+-[a-zA-Z0-9.]+-?(.*)$/\1/p'
 }
 
 # get_available_packages list available packages in a bcl release git
