@@ -264,8 +264,8 @@ cache_package() {
     local package_commit_hash=$3
     local cache_mode=$4
 
-    if [[ "$install_mode" != "default" ]] && [[ "$install_mode" != "force" ]]; then
-        install_mode="default"
+    if [[ "$cache_mode" != "default" ]] && [[ "$cache_mode" != "force" ]]; then
+        cache_mode="default"
     fi
 
     local pkg_cache_dir="$CACHE_DIRECTORY/$package_canonical_name-$package_commit_hash"
