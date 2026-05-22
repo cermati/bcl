@@ -32,7 +32,17 @@ for PACKAGE_BUILD in `tail -n+2 $APP_DIR/BCLFile`; do
     package_channel=$(get_package_channel $PACKAGE_BUILD)
     package_platform=$(get_package_platform $PACKAGE_BUILD)
 
-    package_canonical_name="$(get_available_canonical_name "$available_packages" "$package_name" "$package_version" "$package_channel" "$package_platform")"
+    # On Apple Silicon, try the native arm64 build first.
+    # Fall back to x86_64 if no arm64 variant is published.
+    if [[ "$package_platform" == "darwin-arm64" ]]; then
+        package_canonical_name="$(get_available_canonical_name "$available_packages" "$package_name" "$package_version" "$package_channel" "darwin-arm64" 2>/dev/null)" || true
+
+        if [[ -z "$package_canonical_name" ]]; then
+            package_canonical_name="$(get_available_canonical_name "$available_packages" "$package_name" "$package_version" "$package_channel" "darwin-x86_64")"
+        fi
+    else
+        package_canonical_name="$(get_available_canonical_name "$available_packages" "$package_name" "$package_version" "$package_channel" "$package_platform")"
+    fi
     package_commit_hash="$(get_package_commit_hash "$remote_branches" "$package_canonical_name")"
 
     is_installed=$(install_package "$RELEASE_REPOSITORY" "$package_canonical_name" "$package_commit_hash" "$APP_DIR")

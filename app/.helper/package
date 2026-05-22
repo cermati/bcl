@@ -75,8 +75,12 @@ get_package_channel() {
 get_package_platform() {
     # macOS need to download the darwin-x86-64 variant
     if [[ $(uname -o) == 'Darwin' ]]; then
-       echo "darwin-x86_64"
-       return
+        if [[ $(uname -m) == 'arm64' ]]; then
+            echo "darwin-arm64"
+        else
+            echo "darwin-x86_64"
+        fi
+        return
     fi
 
     local sed_opts="-nr"
