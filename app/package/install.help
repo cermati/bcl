@@ -10,29 +10,34 @@ sample-package2-v1.2.3-release
 
 Arch-aware resolution
 
-For entries that do not pin a platform/arch suffix (the common case,
-e.g. "sv-v2.10.0-release"), BCL picks the per-arch release branch that
-matches the host:
+For entries that do not pin a platform suffix (the common case,
+e.g. "sv-v2.10.0-release"), BCL picks the per-platform release branch that
+matches the host. The platform label is the OS-qualified <kernel>-<arch>
+string devops-toolkit publishes under (darwin-arm64, darwin-x86_64,
+linux-x86_64):
 
-  1. <entry>-<host_arch>   preferred — e.g. -arm64 on Apple Silicon
-  2. <entry>               legacy unsuffixed branch (runs under Rosetta
-                           on Apple Silicon)
-  3. <entry>-amd64         Apple Silicon only; prompts before installing
-                           (skipped on Linux arm64 — Rosetta is macOS-
-                           specific, so an amd64 binary would not run)
+  1. <entry>-<host_platform>   preferred — e.g. -darwin-arm64 on Apple
+                               Silicon, -darwin-x86_64 on Intel mac,
+                               -linux-x86_64 on Linux
+  2. <entry>                   legacy unsuffixed branch (runs under Rosetta
+                               on Apple Silicon)
+  3. <entry>-darwin-x86_64     Apple Silicon only; prompts before installing
+                               (skipped on Linux arm64 — Rosetta is macOS-
+                               specific, so an Intel binary would not run)
 
-On Linux arm64, steps 1 and 2 still apply. If you need to pin an
-amd64 branch on a non-macOS arm64 host, use --no-arch-resolve.
+On Linux arm64, steps 1 and 2 still apply. If you need to pin a specific
+platform branch on a non-macOS arm64 host, use --no-arch-resolve.
 
-If you accept the amd64 fallback on an arm64 host, the choice is cached
-at cli/.bcl-arch-choice and reused on later runs so you are not reprompted.
-When a native arm64 build later lands for the same entry, BCL detects it,
-removes the cached fallback, and reinstalls with the native build.
+If you accept the darwin-x86_64 (Rosetta) fallback on an arm64 host, the
+choice is cached at cli/.bcl-arch-choice and reused on later runs so you are
+not reprompted. When a native darwin-arm64 build later lands for the same
+entry, BCL detects it, removes the cached fallback, and reinstalls with the
+native build.
 
 The cache key includes the exact entry string, so bumping the version in
-BCLFile re-evaluates automatically. If you switch to an amd64 build by
+BCLFile re-evaluates automatically. If you switch to a darwin-x86_64 build by
 other means (e.g. --no-arch-resolve) and want BCL to upgrade you to a
-later-published arm64 build, run with --reset-arch-choice once.
+later-published darwin-arm64 build, run with --reset-arch-choice once.
 
 Flags:
   --no-arch-resolve     Resolve each entry literally as written; do not
@@ -43,11 +48,14 @@ Flags:
                         re-evaluate without bumping versions.
 
 Environment variables:
-  BCL_AUTO_FALLBACK_AMD64=1   Auto-accept the amd64 fallback on arm64
-                              hosts (for CI and non-interactive contexts).
-  BCL_FORCE_ARCH=amd64|arm64  Override host arch detection. Useful for
-                              testing and for containers whose effective
-                              arch differs from the host kernel.
+  BCL_AUTO_FALLBACK_AMD64=1   Auto-accept the darwin-x86_64 (Rosetta) fallback
+                              on arm64 hosts (for CI and non-interactive
+                              contexts).
+  BCL_FORCE_PLATFORM=<label>  Override host platform detection with an
+                              OS-qualified label (e.g. darwin-arm64,
+                              darwin-x86_64, linux-x86_64). Useful for testing
+                              and for containers whose effective platform
+                              differs from the host kernel.
 
 Add cli/.bcl-arch-choice to your project's .gitignore — it is per-developer
 state, not source code.

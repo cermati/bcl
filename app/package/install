@@ -42,7 +42,7 @@ if [[ "$reset_arch_choice" == "true" ]]; then
     rm -f "$(bcl_arch_choice_path "$APP_DIR")"
 fi
 
-host_arch=$(bcl_host_arch)
+host_platform=$(bcl_host_platform)
 
 # Fetch appropriate version of the package from git
 echo "Fetching available packages from git..."
@@ -88,7 +88,7 @@ for PACKAGE_BUILD in `tail -n+2 $APP_DIR/BCLFile`; do
         resolver_output=$(bcl_resolve_arch_branch \
             "$PACKAGE_BUILD" \
             "$available_packages" \
-            "$host_arch" \
+            "$host_platform" \
             "$APP_DIR" \
             "$RELEASE_REPOSITORY") || resolver_status=$?
 

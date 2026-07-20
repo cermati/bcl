@@ -12,29 +12,27 @@
 set -e
 
 ARCH_CHOICE_FILENAME=".bcl-arch-choice"
-AMD64_FALLBACK_TAG="amd64-fallback"
+# The platform we fall back to on Apple Silicon when no native arm64 build
+# exists: the Intel (darwin-x86_64) build runs under Rosetta 2.
+ROSETTA_PLATFORM="darwin-x86_64"
+ROSETTA_FALLBACK_TAG="darwin-x86_64-fallback"
 
-# bcl_host_arch echoes "amd64" or "arm64". Honors BCL_FORCE_ARCH for testing
-# and for containers whose effective arch differs from the host kernel's.
-bcl_host_arch() {
-    if [[ -n "$BCL_FORCE_ARCH" ]]; then
-        case "$BCL_FORCE_ARCH" in
-            amd64|arm64) echo "$BCL_FORCE_ARCH"; return 0 ;;
-            *)
-                echo "BCL_FORCE_ARCH must be amd64 or arm64 (got: $BCL_FORCE_ARCH)" >&2
-                return 1
-                ;;
-        esac
+# bcl_host_platform echoes the OS-qualified platform label that matches the
+# tags devops-toolkit publishes packages under (see get_package_canonical_name
+# in app/.helper/package): "darwin-arm64", "darwin-x86_64", "linux-x86_64".
+# This mirrors platform() in app/.helper/system. Honors BCL_FORCE_PLATFORM for
+# testing and for containers whose effective platform differs from the host
+# kernel's.
+bcl_host_platform() {
+    if [[ -n "$BCL_FORCE_PLATFORM" ]]; then
+        echo "$BCL_FORCE_PLATFORM"
+        return 0
     fi
 
-    case "$(uname -m)" in
-        x86_64|amd64)  echo "amd64" ;;
-        arm64|aarch64) echo "arm64" ;;
-        *)
-            echo "Unsupported host architecture: $(uname -m)" >&2
-            return 1
-            ;;
-    esac
+    local kern arch
+    kern="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    arch="$(uname -m | tr '[:upper:]' '[:lower:]')"
+    echo "${kern}-${arch}"
 }
 
 # bcl_branch_in_available returns 0 if the named branch is an exact line in
@@ -70,14 +68,14 @@ bcl_arch_choice_path() {
     echo "${install_dir}/cli/${ARCH_CHOICE_FILENAME}"
 }
 
-# bcl_read_arch_choice echoes the tag stored for (remote, entry, host_arch),
-# or nothing if no row exists. Rows are arch-keyed so an install directory
-# shared between hosts of different architectures does not cross-contaminate.
+# bcl_read_arch_choice echoes the tag stored for (remote, entry, host_platform),
+# or nothing if no row exists. Rows are platform-keyed so an install directory
+# shared between hosts of different platforms does not cross-contaminate.
 bcl_read_arch_choice() {
     local install_dir="$1"
     local remote="$2"
     local entry="$3"
-    local host_arch="$4"
+    local host_platform="$4"
 
     local path
     path=$(bcl_arch_choice_path "$install_dir")
@@ -85,17 +83,17 @@ bcl_read_arch_choice() {
         return 0
     fi
 
-    awk -F '\t' -v r="$remote" -v e="$entry" -v a="$host_arch" \
+    awk -F '\t' -v r="$remote" -v e="$entry" -v a="$host_platform" \
         '$1 == r && $2 == e && $3 == a { print $4; exit }' "$path"
 }
 
-# bcl_save_arch_choice replaces any existing row for (remote, entry, host_arch)
+# bcl_save_arch_choice replaces any existing row for (remote, entry, host_platform)
 # and appends a fresh one. Creates the cli/ directory if it does not yet exist.
 bcl_save_arch_choice() {
     local install_dir="$1"
     local remote="$2"
     local entry="$3"
-    local host_arch="$4"
+    local host_platform="$4"
     local tag="$5"
 
     local path
@@ -105,21 +103,21 @@ bcl_save_arch_choice() {
     if [[ -f "$path" ]]; then
         local tmp
         tmp=$(mktemp)
-        awk -F '\t' -v r="$remote" -v e="$entry" -v a="$host_arch" \
+        awk -F '\t' -v r="$remote" -v e="$entry" -v a="$host_platform" \
             '!($1 == r && $2 == e && $3 == a)' "$path" > "$tmp"
         mv "$tmp" "$path"
     fi
 
-    printf '%s\t%s\t%s\t%s\n' "$remote" "$entry" "$host_arch" "$tag" >> "$path"
+    printf '%s\t%s\t%s\t%s\n' "$remote" "$entry" "$host_platform" "$tag" >> "$path"
 }
 
-# bcl_drop_arch_choice removes the row for (remote, entry, host_arch), and
+# bcl_drop_arch_choice removes the row for (remote, entry, host_platform), and
 # removes the cache file entirely if no rows remain.
 bcl_drop_arch_choice() {
     local install_dir="$1"
     local remote="$2"
     local entry="$3"
-    local host_arch="$4"
+    local host_platform="$4"
 
     local path
     path=$(bcl_arch_choice_path "$install_dir")
@@ -129,7 +127,7 @@ bcl_drop_arch_choice() {
 
     local tmp
     tmp=$(mktemp)
-    awk -F '\t' -v r="$remote" -v e="$entry" -v a="$host_arch" \
+    awk -F '\t' -v r="$remote" -v e="$entry" -v a="$host_platform" \
         '!($1 == r && $2 == e && $3 == a)' "$path" > "$tmp"
     mv "$tmp" "$path"
 
@@ -146,7 +144,7 @@ bcl_prompt_amd64_fallback() {
 
     echo "" >&2
     echo "arm64 build for $entry is not available yet." >&2
-    echo "An amd64 build is available and will run on Apple Silicon under Rosetta." >&2
+    echo "An Intel (darwin-x86_64) build is available and will run on Apple Silicon under Rosetta." >&2
     echo "Performance will be noticeably slower than a native arm64 build." >&2
 
     if [[ "$BCL_AUTO_FALLBACK_AMD64" == "1" ]]; then
@@ -164,64 +162,72 @@ bcl_prompt_amd64_fallback() {
 
 # bcl_resolve_arch_branch resolves $entry to a concrete branch on stdout.
 #
+# $host_platform is the OS-qualified label from bcl_host_platform
+# (e.g. "darwin-arm64", "darwin-x86_64", "linux-x86_64"), matching the tags
+# devops-toolkit publishes under.
+#
 # Exit codes:
 #   0  resolved; install normally
-#   10 resolved AND superseded a cached amd64 fallback with a now-available
-#      native arm64 build — caller should force reinstall, since
+#   10 resolved AND superseded a cached Rosetta (darwin-x86_64) fallback with a
+#      now-available native arm64 build — caller should force reinstall, since
 #      is_package_installed would otherwise short-circuit on the same
 #      stripped canonical name
-#   1  total miss (after step 4) or user declined the amd64 fallback
+#   1  total miss (after step 4) or user declined the Rosetta fallback
 bcl_resolve_arch_branch() {
     local entry="$1"
     local available_packages="$2"
-    local host_arch="$3"
+    local host_platform="$3"
     local install_dir="$4"
     local release_repo="$5"
 
-    local arch_branch="${entry}-${host_arch}"
-    local amd64_branch="${entry}-amd64"
+    local native_branch="${entry}-${host_platform}"
+    local rosetta_branch="${entry}-${ROSETTA_PLATFORM}"
 
-    # Step 0: cached fallback handling (arm64 only). When the user previously
-    # accepted the amd64 fallback for this exact entry, prefer to honor that
-    # choice — unless the native arm64 build has since landed, in which case
-    # we swap to it and drop the cache row.
-    if [[ "$host_arch" == "arm64" ]]; then
+    # Apple Silicon is the only host that gets a cross-arch (Rosetta) fallback:
+    # a missing darwin-arm64 native build falls back to darwin-x86_64 under
+    # Rosetta. Rosetta is Darwin-only, so Linux arm64 never gets this.
+    local is_apple_silicon="false"
+    if [[ "$host_platform" == "darwin-arm64" ]]; then
+        is_apple_silicon="true"
+    fi
+
+    # Step 0: cached fallback handling (Apple Silicon only). When the user
+    # previously accepted the Rosetta fallback for this exact entry, prefer to
+    # honor that choice — unless the native arm64 build has since landed, in
+    # which case we swap to it and drop the cache row.
+    if [[ "$is_apple_silicon" == "true" ]]; then
         local cached
-        cached=$(bcl_read_arch_choice "$install_dir" "$release_repo" "$entry" "$host_arch")
-        if [[ "$cached" == "$AMD64_FALLBACK_TAG" ]]; then
-            if bcl_branch_in_available "$arch_branch" "$available_packages"; then
-                bcl_drop_arch_choice "$install_dir" "$release_repo" "$entry" "$host_arch"
-                echo "arm64 build for $entry is now available — replacing the cached amd64 install." >&2
+        cached=$(bcl_read_arch_choice "$install_dir" "$release_repo" "$entry" "$host_platform")
+        if [[ "$cached" == "$ROSETTA_FALLBACK_TAG" ]]; then
+            if bcl_branch_in_available "$native_branch" "$available_packages"; then
+                bcl_drop_arch_choice "$install_dir" "$release_repo" "$entry" "$host_platform"
+                echo "arm64 build for $entry is now available — replacing the cached Rosetta install." >&2
                 echo "Installing $entry (arm64 native)." >&2
-                echo "$arch_branch"
+                echo "$native_branch"
                 return 10
             fi
-            if bcl_branch_in_available "$amd64_branch" "$available_packages"; then
-                echo "Using cached choice: amd64 binary for $entry on this arm64 host." >&2
+            if bcl_branch_in_available "$rosetta_branch" "$available_packages"; then
+                echo "Using cached choice: darwin-x86_64 binary for $entry on this arm64 host." >&2
                 echo "Run 'bcl package install --reset-arch-choice' to re-evaluate." >&2
-                echo "$amd64_branch"
+                echo "$rosetta_branch"
                 return 0
             fi
-            # Cache row stranded — neither native nor amd64 branch exists for
-            # this entry. Fall through to the normal steps.
+            # Cache row stranded — neither native nor darwin-x86_64 branch
+            # exists for this entry. Fall through to the normal steps.
         fi
     fi
 
-    # Step 1: <entry>-<host_arch>
-    if bcl_branch_in_available "$arch_branch" "$available_packages"; then
-        echo "Installing $entry ($host_arch native)." >&2
-        echo "$arch_branch"
+    # Step 1: <entry>-<host_platform> (darwin-arm64 / darwin-x86_64 / linux-x86_64)
+    if bcl_branch_in_available "$native_branch" "$available_packages"; then
+        echo "Installing $entry ($host_platform)." >&2
+        echo "$native_branch"
         return 0
     fi
 
     # Step 2: <entry> legacy unsuffixed
     if bcl_branch_in_available "$entry" "$available_packages"; then
-        if [[ "$host_arch" == "arm64" ]]; then
-            if [[ "$(uname -s)" == "Darwin" ]]; then
-                echo "Installing $entry (legacy unsuffixed branch, amd64 binary under Rosetta — request a maintainer to publish an arm64 build for better performance)." >&2
-            else
-                echo "Installing $entry (legacy unsuffixed branch; request a maintainer to publish an arm64 build for native execution)." >&2
-            fi
+        if [[ "$is_apple_silicon" == "true" ]]; then
+            echo "Installing $entry (legacy unsuffixed branch — request a maintainer to publish a darwin-arm64 build for native execution)." >&2
         else
             echo "Installing $entry." >&2
         fi
@@ -229,30 +235,29 @@ bcl_resolve_arch_branch() {
         return 0
     fi
 
-    # Step 3: amd64 cross-arch fallback (arm64 macOS only — Rosetta is
-    # Darwin-only, so we do not offer an unrunnable binary on Linux arm64).
-    if [[ "$host_arch" == "arm64" ]] \
-       && [[ "$(uname -s)" == "Darwin" ]] \
-       && bcl_branch_in_available "$amd64_branch" "$available_packages"; then
+    # Step 3: darwin-x86_64 cross-arch fallback (Apple Silicon only — Rosetta
+    # is Darwin-only, so we do not offer an unrunnable binary on Linux arm64).
+    if [[ "$is_apple_silicon" == "true" ]] \
+       && bcl_branch_in_available "$rosetta_branch" "$available_packages"; then
         if bcl_prompt_amd64_fallback "$entry"; then
-            bcl_save_arch_choice "$install_dir" "$release_repo" "$entry" "$host_arch" "$AMD64_FALLBACK_TAG"
-            echo "Installing $entry (amd64 fallback under Rosetta)." >&2
-            echo "$amd64_branch"
+            bcl_save_arch_choice "$install_dir" "$release_repo" "$entry" "$host_platform" "$ROSETTA_FALLBACK_TAG"
+            echo "Installing $entry (darwin-x86_64 fallback under Rosetta)." >&2
+            echo "$rosetta_branch"
             return 0
         fi
         echo "" >&2
-        echo "Aborting: arm64 build for $entry not available and amd64 fallback declined." >&2
+        echo "Aborting: arm64 build for $entry not available and darwin-x86_64 fallback declined." >&2
         echo "See the arch-aware resolution spec for guidance on requesting an arm64 release." >&2
         return 1
     fi
 
     # Step 4: total miss.
     echo "" >&2
-    echo "Could not resolve $entry on host arch $host_arch. Tried branches:" >&2
-    echo "  - $arch_branch (not found)" >&2
+    echo "Could not resolve $entry on host platform $host_platform. Tried branches:" >&2
+    echo "  - $native_branch (not found)" >&2
     echo "  - $entry (not found)" >&2
-    if [[ "$host_arch" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
-        echo "  - $amd64_branch (not found)" >&2
+    if [[ "$is_apple_silicon" == "true" ]]; then
+        echo "  - $rosetta_branch (not found)" >&2
     fi
     echo "See the arch-aware resolution spec for resolution rules." >&2
     return 1
