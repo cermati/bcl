@@ -219,18 +219,20 @@ bcl_resolve_arch_branch() {
 
     # Step 1: <entry>-<host_platform> (darwin-arm64 / darwin-x86_64 / linux-x86_64)
     if bcl_branch_in_available "$native_branch" "$available_packages"; then
-        echo "Installing $entry ($host_platform)." >&2
+        echo "Resolved $entry ($host_platform)." >&2
         echo "$native_branch"
         return 0
     fi
 
-    # Step 2: <entry> legacy unsuffixed
-    if bcl_branch_in_available "$entry" "$available_packages"; then
-        if [[ "$is_apple_silicon" == "true" ]]; then
-            echo "Installing $entry (legacy unsuffixed branch — request a maintainer to publish a darwin-arm64 build for native execution)." >&2
-        else
-            echo "Installing $entry." >&2
-        fi
+    # Step 2: <entry> legacy unsuffixed. In devops-toolkit the unsuffixed branch
+    # is the Linux (docker-built) artifact -- e.g. `bcl package publish cssh` and
+    # `bcl package publish dev` push the amd64 Linux binary under the bare
+    # `<entry>` branch. That binary cannot run on macOS, so Darwin hosts must NOT
+    # install it: skip step 2 there and let step 3 (darwin-x86_64 under Rosetta)
+    # or step 4 handle it. Only non-Darwin hosts may use the unsuffixed branch.
+    if [[ "$host_platform" != darwin-* ]] \
+       && bcl_branch_in_available "$entry" "$available_packages"; then
+        echo "Resolved $entry (legacy unsuffixed branch)." >&2
         echo "$entry"
         return 0
     fi
@@ -241,7 +243,7 @@ bcl_resolve_arch_branch() {
        && bcl_branch_in_available "$rosetta_branch" "$available_packages"; then
         if bcl_prompt_amd64_fallback "$entry"; then
             bcl_save_arch_choice "$install_dir" "$release_repo" "$entry" "$host_platform" "$ROSETTA_FALLBACK_TAG"
-            echo "Installing $entry (darwin-x86_64 fallback under Rosetta)." >&2
+            echo "Resolved $entry (darwin-x86_64 fallback under Rosetta)." >&2
             echo "$rosetta_branch"
             return 0
         fi

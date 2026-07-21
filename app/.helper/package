@@ -125,7 +125,7 @@ get_available_canonical_name() {
         package_platform=$DEFAULT_PLATFORM
     fi
 
-    branches="$(echo "$packages_available" |  _grep -Pe "^$package_name-" || true | sort -V)"
+    branches="$(echo "$packages_available" | { _grep -Pe "^$package_name-" || true; } | sort -V)"
 
     if [ "$package_version" == "$LATEST_VERSION" ]; then
         branches="$(echo "$branches" | _grep -Pe "^$package_name-" | _grep -Pe "-$package_channel" || true)"

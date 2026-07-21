@@ -72,14 +72,23 @@ for PACKAGE_BUILD in `tail -n+2 $APP_DIR/BCLFile`; do
             exit 1
         fi
     elif bcl_entry_has_arch_or_platform_suffix "$PACKAGE_BUILD"; then
-        # Entry already pins a platform/arch suffix (e.g. -amd64, -arm64,
-        # -darwin-x86_64). Defer to the legacy resolver — no arch rewrite.
+        # Entry already pins a platform suffix (e.g. -darwin-arm64,
+        # -darwin-x86_64, -linux-x86_64). Resolve it literally -- no arch rewrite.
         package_name=$(get_package_name $PACKAGE_BUILD)
         package_version=$(get_package_version $PACKAGE_BUILD)
         package_channel=$(get_package_channel $PACKAGE_BUILD)
         package_platform=$(get_package_platform $PACKAGE_BUILD)
 
-        package_canonical_name="$(get_available_canonical_name "$available_packages" "$package_name" "$package_version" "$package_channel" "$package_platform")"
+        pinned_status=0
+        package_canonical_name="$(get_available_canonical_name "$available_packages" "$package_name" "$package_version" "$package_channel" "$package_platform")" || pinned_status=$?
+
+        # A pinned platform that was never published resolves to an empty name
+        # with exit 0; without this guard the empty name flows into an empty
+        # `git clone -b ""` and a false "installed". Mirror the fallback guard.
+        if [[ $pinned_status -ne 0 ]] || [[ -z "$package_canonical_name" ]]; then
+            >&2 echo -e "\033[31mPackage '$PACKAGE_BUILD' not found on $RELEASE_REPOSITORY\033[39m"
+            exit 1
+        fi
     else
         # Unsuffixed entry — apply arch-aware resolution. On total miss we
         # fall through to the legacy resolver so packages still publishing
