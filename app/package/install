@@ -3,9 +3,30 @@
 set -e
 
 source $ROOT_DIR/app/.helper/package
+source $ROOT_DIR/app/.helper/arch
 
 APP_DIR=`pwd`
 RELEASE_REPOSITORY=''
+
+# Flags (must precede any future positional args):
+#   --no-arch-resolve     Resolve each BCLFile entry literally as written;
+#                         do not try arch-suffixed variants.
+#   --reset-arch-choice   Drop the cached amd64-fallback decisions and force
+#                         a reinstall for every entry in this invocation.
+no_arch_resolve="false"
+reset_arch_choice="false"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-arch-resolve)   no_arch_resolve="true"; shift ;;
+        --reset-arch-choice) reset_arch_choice="true"; shift ;;
+        --help|-h)           exit 3 ;;
+        *)
+            >&2 echo -e "\033[31mUnknown option: $1\033[39m"
+            exit 3
+            ;;
+    esac
+done
 
 if [[ ! -f "$APP_DIR/BCLFile" ]]; then
     exit 0
@@ -17,6 +38,12 @@ if [[ ! -d "$APP_DIR/cli" ]]; then
     mkdir -p $APP_DIR/cli
 fi
 
+if [[ "$reset_arch_choice" == "true" ]]; then
+    rm -f "$(bcl_arch_choice_path "$APP_DIR")"
+fi
+
+host_platform=$(bcl_host_platform)
+
 # Fetch appropriate version of the package from git
 echo "Fetching available packages from git..."
 remote_branches=$(git ls-remote "$RELEASE_REPOSITORY")
@@ -27,15 +54,86 @@ for PACKAGE_BUILD in `tail -n+2 $APP_DIR/BCLFile`; do
         rm -rf .$PACKAGE_BUILD
     fi
 
-    package_name=$(get_package_name $PACKAGE_BUILD)
-    package_version=$(get_package_version $PACKAGE_BUILD)
-    package_channel=$(get_package_channel $PACKAGE_BUILD)
-    package_platform=$(get_package_platform $PACKAGE_BUILD)
+    # --reset-arch-choice forces reinstall regardless of which branch we end
+    # up resolving to: dropping the cache row alone would not bypass
+    # is_package_installed for same-version transitions.
+    install_mode="default"
+    if [[ "$reset_arch_choice" == "true" ]]; then
+        install_mode="force"
+    fi
+    package_canonical_name=""
 
-    package_canonical_name="$(get_available_canonical_name "$available_packages" "$package_name" "$package_version" "$package_channel" "$package_platform")"
+    if [[ "$no_arch_resolve" == "true" ]]; then
+        # Escape hatch: use the BCLFile entry verbatim as the branch name.
+        if bcl_branch_in_available "$PACKAGE_BUILD" "$available_packages"; then
+            package_canonical_name="$PACKAGE_BUILD"
+        else
+            >&2 echo -e "\033[31mBranch '$PACKAGE_BUILD' not found on $RELEASE_REPOSITORY (--no-arch-resolve)\033[39m"
+            exit 1
+        fi
+    elif bcl_entry_has_arch_or_platform_suffix "$PACKAGE_BUILD"; then
+        # Entry already pins a platform suffix (e.g. -darwin-arm64,
+        # -darwin-x86_64, -linux-x86_64). Resolve it literally -- no arch rewrite.
+        package_name=$(get_package_name $PACKAGE_BUILD)
+        package_version=$(get_package_version $PACKAGE_BUILD)
+        package_channel=$(get_package_channel $PACKAGE_BUILD)
+        package_platform=$(get_package_platform $PACKAGE_BUILD)
+
+        pinned_status=0
+        package_canonical_name="$(get_available_canonical_name "$available_packages" "$package_name" "$package_version" "$package_channel" "$package_platform")" || pinned_status=$?
+
+        # A pinned platform that was never published resolves to an empty name
+        # with exit 0; without this guard the empty name flows into an empty
+        # `git clone -b ""` and a false "installed". Mirror the fallback guard.
+        if [[ $pinned_status -ne 0 ]] || [[ -z "$package_canonical_name" ]]; then
+            >&2 echo -e "\033[31mPackage '$PACKAGE_BUILD' not found on $RELEASE_REPOSITORY\033[39m"
+            exit 1
+        fi
+    else
+        # Unsuffixed entry — apply arch-aware resolution. On total miss we
+        # fall through to the legacy resolver so packages still publishing
+        # under the -darwin-x86_64/-linux-x86_64 scheme keep installing.
+        resolver_status=0
+        resolver_output=$(bcl_resolve_arch_branch \
+            "$PACKAGE_BUILD" \
+            "$available_packages" \
+            "$host_platform" \
+            "$APP_DIR" \
+            "$RELEASE_REPOSITORY") || resolver_status=$?
+
+        case $resolver_status in
+            0)
+                package_canonical_name="$resolver_output"
+                ;;
+            10)
+                # Cached amd64 fallback superseded by native arm64.
+                package_canonical_name="$resolver_output"
+                install_mode="force"
+                ;;
+            *)
+                package_name=$(get_package_name $PACKAGE_BUILD)
+                package_version=$(get_package_version $PACKAGE_BUILD)
+                package_channel=$(get_package_channel $PACKAGE_BUILD)
+                package_platform=$(get_package_platform $PACKAGE_BUILD)
+
+                legacy_status=0
+                package_canonical_name=$(get_available_canonical_name \
+                    "$available_packages" \
+                    "$package_name" \
+                    "$package_version" \
+                    "$package_channel" \
+                    "$package_platform") || legacy_status=$?
+
+                if [[ $legacy_status -ne 0 ]] || [[ -z "$package_canonical_name" ]]; then
+                    exit 1
+                fi
+                ;;
+        esac
+    fi
+
     package_commit_hash="$(get_package_commit_hash "$remote_branches" "$package_canonical_name")"
 
-    is_installed=$(install_package "$RELEASE_REPOSITORY" "$package_canonical_name" "$package_commit_hash" "$APP_DIR")
+    is_installed=$(install_package "$RELEASE_REPOSITORY" "$package_canonical_name" "$package_commit_hash" "$APP_DIR" "$install_mode")
     if [[ "$is_installed" == "true" ]]; then
         post_install "$package_canonical_name" "$INSTALL_DIRECTORY"
         echo "$package_canonical_name installed"

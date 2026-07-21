@@ -73,12 +73,6 @@ get_package_channel() {
 # name. Returns an empty string when the package canonical name does not specify
 # the targeted platform.
 get_package_platform() {
-    # macOS need to download the darwin-x86-64 variant
-    if [[ $(uname -o) == 'Darwin' ]]; then
-       echo "darwin-x86_64"
-       return
-    fi
-
     local sed_opts="-nr"
     if [[ "$(kernel)" == "Darwin" ]]; then
         sed_opts="-nE"
@@ -131,7 +125,7 @@ get_available_canonical_name() {
         package_platform=$DEFAULT_PLATFORM
     fi
 
-    branches="$(echo "$packages_available" |  _grep -Pe "^$package_name-" || true | sort -V)"
+    branches="$(echo "$packages_available" | { _grep -Pe "^$package_name-" || true; } | sort -V)"
 
     if [ "$package_version" == "$LATEST_VERSION" ]; then
         branches="$(echo "$branches" | _grep -Pe "^$package_name-" | _grep -Pe "-$package_channel" || true)"
@@ -264,8 +258,8 @@ cache_package() {
     local package_commit_hash=$3
     local cache_mode=$4
 
-    if [[ "$install_mode" != "default" ]] && [[ "$install_mode" != "force" ]]; then
-        install_mode="default"
+    if [[ "$cache_mode" != "default" ]] && [[ "$cache_mode" != "force" ]]; then
+        cache_mode="default"
     fi
 
     local pkg_cache_dir="$CACHE_DIRECTORY/$package_canonical_name-$package_commit_hash"
