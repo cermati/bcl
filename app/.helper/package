@@ -157,20 +157,53 @@ get_available_canonical_name() {
     echo "${latest_branch}"
 }
 
-# is_package_installed returns "true" whether a package with the same version
-# and release channel is already installed in a directory
+# is_package_installed returns "true" when the exact package -- same version,
+# channel, AND target platform -- is already installed in a directory.
+#
+# Platform matters for the install decision: the arch-aware resolver may pick a
+# different-platform build of the SAME version (e.g. darwin-x86_64 ->
+# darwin-arm64), and that must reinstall instead of being treated as a no-op.
+# The published BUILD file never records the platform -- devops-toolkit ships
+# BUILD verbatim and `bcl package publish` only stamps the platform onto the git
+# branch name, not the file -- so install_package persists the resolved branch
+# name in a marker file (.bcl-build) that we compare against here.
 is_package_installed() {
     package_canonical_name=$1
     install_dir=$2
 
     package_name=$(get_package_name $package_canonical_name)
+    local pkg_dir="$install_dir/cli/$package_name"
 
-    # We don't care about the package's target platform, so we need to discard
-    # it
+    if [[ ! -d "$pkg_dir" ]]; then
+        echo "false"
+        return
+    fi
+
+    # Preferred source of truth: the platform-stamped marker written by
+    # install_package. When present, require an exact match on the full
+    # canonical name (version + channel + platform).
+    if [[ -f "$pkg_dir/.bcl-build" ]]; then
+        installed_package=$(head -n 1 "$pkg_dir/.bcl-build")
+
+        if [ "$package_canonical_name" == "$installed_package" ]; then
+            echo "true"
+            return
+        fi
+
+        echo "false"
+        return
+    fi
+
+    # Legacy install with no marker: BUILD does not record the platform, so we
+    # cannot confirm which arch is on disk. Keep the old platform-blind
+    # version+channel comparison for cross-platform (unsuffixed) requests, but
+    # force a one-time reinstall for a platform-specific request so the
+    # correct-arch build wins and the marker is written from then on.
+    package_platform=$(get_package_platform "$package_canonical_name")
     package_canonical_name=$(get_package_canonical_name_without_platform "$package_canonical_name")
 
-    if [[ -d "$install_dir/cli/$package_name" && -f "$install_dir/cli/$package_name/BUILD" ]]; then
-        installed_package=$(head -n 1 "$install_dir/cli/$package_name/BUILD")
+    if [[ -z "$package_platform" && -f "$pkg_dir/BUILD" ]]; then
+        installed_package=$(head -n 1 "$pkg_dir/BUILD")
         installed_package=$(get_package_canonical_name_without_platform "$installed_package")
 
         if [ "$package_canonical_name" == "$installed_package" ]; then
@@ -212,6 +245,12 @@ install_package() {
     mkdir -p "$install_dir/cli"
     rm -rf "$install_dir/cli/$package_name"
     cp -R  "$pkg_cache_dir"/* "$install_dir/cli"
+
+    # Record the resolved branch name (which carries the platform) so future
+    # runs can tell a same-version cross-platform swap from a genuine no-op.
+    # BUILD itself never records the platform (publish stamps it onto the git
+    # branch, not the file).
+    printf '%s\n' "$package_canonical_name" > "$install_dir/cli/$package_name/.bcl-build"
 
     echo "true"
 }
